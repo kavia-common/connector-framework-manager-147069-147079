@@ -25,30 +25,29 @@ Edit `.env` with your configuration:
 
 ```env
 # Database Configuration
+# For Postgres (recommended for JSONB and concurrency)
 DATABASE_URL=postgresql://user:password@localhost/connector_framework_db
+# Or for local development without Postgres
+# DATABASE_URL=sqlite:///./connector_framework.db
 
 # Application Configuration
 APP_NAME=Connector Framework Manager
 JWT_SECRET=your-super-secret-jwt-key-here-minimum-32-characters
 BACKEND_BASE_URL=http://localhost:3001
 FRONTEND_BASE_URL=http://localhost:3000
+OAUTH_REDIRECT_BASE=http://localhost:3001
 
 # OAuth Client IDs and Secrets (configure for each connector you plan to use)
 JIRA_CLIENT_ID=your-jira-client-id
 JIRA_CLIENT_SECRET=your-jira-client-secret
-
 CONFLUENCE_CLIENT_ID=your-confluence-client-id
 CONFLUENCE_CLIENT_SECRET=your-confluence-client-secret
-
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
-
 NOTION_CLIENT_ID=your-notion-client-id
 NOTION_CLIENT_SECRET=your-notion-client-secret
-
 FIGMA_CLIENT_ID=your-figma-client-id
 FIGMA_CLIENT_SECRET=your-figma-client-secret
-
 DATADOG_CLIENT_ID=your-datadog-client-id
 DATADOG_CLIENT_SECRET=your-datadog-client-secret
 ```
@@ -69,12 +68,47 @@ For each connector you want to use, you'll need to:
 - **Figma**: Create an app in Figma Developers
 - **Datadog**: Create an OAuth app in Datadog App Management
 
+## Database and Migrations
+
+This project uses SQLAlchemy models with Alembic migrations.
+
+- JSON fields (connector.config_schema, connection.config_data) are created as JSONB on PostgreSQL and JSON on other databases.
+- Unique constraints and FKs:
+  - connectors.key is unique
+  - users.email is unique
+  - connections has a unique composite constraint on (user_id, connector_id)
+  - FKs use ON DELETE CASCADE to align with SQLAlchemy relationship cascades
+
+### Running migrations
+
+1. Ensure `.env` has `DATABASE_URL` set.
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run migrations:
+   ```bash
+   alembic upgrade head
+   ```
+
+### Autogenerate verification (optional for developers)
+
+To verify models and migrations are in sync:
+```bash
+alembic revision --autogenerate -m "check diff"
+# Review the generated revision; it should show "No changes in schema detected."
+# Then discard it if not needed:
+git checkout -- alembic/versions
+```
+
+If a diff appears, update models or migration accordingly so that autogenerate produces no changes.
+
 ## Development
 
 ### Prerequisites
 
 - Python 3.8+
-- PostgreSQL database
+- PostgreSQL database (recommended)
 - Virtual environment (recommended)
 
 ### Installation
@@ -174,10 +208,11 @@ The backend is configured to accept requests from:
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | Yes | - |
+| `DATABASE_URL` | Database connection string | Yes | sqlite:///./connector_framework.db |
 | `JWT_SECRET` | Secret key for JWT tokens | Yes | - |
 | `BACKEND_BASE_URL` | Backend server URL | No | http://localhost:3001 |
 | `FRONTEND_BASE_URL` | Frontend application URL | No | http://localhost:3000 |
+| `OAUTH_REDIRECT_BASE` | Backend URL base for OAuth callbacks | No | http://localhost:3001 |
 | `{CONNECTOR}_CLIENT_ID` | OAuth client ID for connector | For OAuth | - |
 | `{CONNECTOR}_CLIENT_SECRET` | OAuth client secret for connector | For OAuth | - |
 
@@ -194,7 +229,7 @@ pytest
 For production deployment:
 
 1. **Set secure environment variables**
-2. **Use a production WSGI server** (e.g., Gunicorn)
+2. **Use a production WSGI/ASGI server** (e.g., Gunicorn + Uvicorn workers)
 3. **Configure SSL/TLS** for HTTPS
 4. **Set up database connection pooling**
 5. **Configure logging and monitoring**

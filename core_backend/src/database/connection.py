@@ -1,38 +1,66 @@
 """Database connection and session management."""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from typing import Generator, Iterator
+
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from typing import Generator
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.pool import NullPool
 
 from src.config.settings import settings
 
-# Get database URL from settings
+# Get database URL from settings (env-driven through pydantic-settings)
 DATABASE_URL = settings.database_url
 
-# Create SQLAlchemy engine
+# Engine configuration:
+# - Use NullPool for serverless/dev environments to avoid lingering connections
+# - For SQLite, set check_same_thread=False
 engine = create_engine(
     DATABASE_URL,
-    # SQLite specific settings
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+    poolclass=NullPool if DATABASE_URL.startswith("postgresql") else None,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    future=True,
 )
 
-# Create SessionLocal class
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Session factory with typing
+SessionLocal: sessionmaker[Session] = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
 
-# Create Base class for declarative models
+# Declarative Base
 Base = declarative_base()
 
 
 # PUBLIC_INTERFACE
-def get_db() -> Generator:
+def get_db() -> Generator[Session, None, None]:
     """
-    Dependency to get database session.
-    
+    Dependency to get a SQLAlchemy session for FastAPI routes.
+
     Yields:
-        Database session that will be automatically closed after use.
+        Session: Database session which is closed after the request finishes.
     """
-    db = SessionLocal()
+    db: Session = SessionLocal()
     try:
         yield db
+        # Do not commit implicitly; route handlers should explicitly commit when needed
     finally:
         db.close()
+
+
+@contextmanager
+def db_session() -> Iterator[Session]:
+    """
+    Context manager for service-layer usage outside FastAPI dependency system.
+
+    Example:
+        with db_session() as db:
+            ...
+    """
+    session: Session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

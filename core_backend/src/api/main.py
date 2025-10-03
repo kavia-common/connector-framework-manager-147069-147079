@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 from src.api.routes import connectors, connections, oauth
 
@@ -25,9 +26,12 @@ app = FastAPI(
 )
 
 # CORS middleware configuration
+frontend_url = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
+backend_url = os.getenv("BACKEND_BASE_URL", "http://localhost:3001")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend and docs
+    allow_origins=[frontend_url, backend_url],  # Frontend and backend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

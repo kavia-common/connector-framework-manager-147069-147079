@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     app_name: str = "Connector Framework Manager"
     debug: bool = False
     
+    # URL configuration
+    backend_base_url: str = "http://localhost:3001"
+    frontend_base_url: str = "http://localhost:3000"
+    
     # JWT configuration
     jwt_secret: str = "your-secret-key-here"  # Should be overridden in .env
     

@@ -80,9 +80,16 @@ State parameter is a signed token with expiry to prevent CSRF.
 Run migrations:
 
 ```bash
+python -m venv venv
+. venv/bin/activate
 pip install -r requirements.txt
 alembic upgrade head
 ```
+
+Troubleshooting:
+- If using the default SQLite file and you re-run migrations, you may see:
+  - sqlite3.OperationalError: index ix_users_email already exists
+- Fix by removing the local SQLite DB file or switching to a fresh database, then re-running `alembic upgrade head`.
 
 ## Development
 

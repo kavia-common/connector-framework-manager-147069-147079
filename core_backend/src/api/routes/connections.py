@@ -70,7 +70,7 @@ async def list_connections(
                 key=connection.connector.key,
                 name=connection.connector.name,
                 config_schema=connection.connector.config_schema,
-                supports_oauth=plugin is not None,
+                supports_oauth=(plugin.metadata.supports_oauth if plugin else False),
                 oauth_scopes=plugin.metadata.oauth_scopes if plugin else [],
                 created_at=connection.connector.created_at
             ),
@@ -128,7 +128,7 @@ async def get_connection(
             key=connection.connector.key,
             name=connection.connector.name,
             config_schema=connection.connector.config_schema,
-            supports_oauth=plugin is not None,
+            supports_oauth=(plugin.metadata.supports_oauth if plugin else False),
             oauth_scopes=plugin.metadata.oauth_scopes if plugin else [],
             created_at=connection.connector.created_at
         ),
@@ -242,7 +242,7 @@ async def create_connection(
             key=connection.connector.key,
             name=connection.connector.name,
             config_schema=connection.connector.config_schema,
-            supports_oauth=plugin is not None,
+            supports_oauth=(plugin.metadata.supports_oauth if plugin else False),
             oauth_scopes=plugin.metadata.oauth_scopes if plugin else [],
             created_at=connection.connector.created_at
         ),

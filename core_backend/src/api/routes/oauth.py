@@ -8,7 +8,7 @@ from src.models.connection import Connection
 from src.models.oauth_token import OAuthToken
 from src.services.plugin_manager import plugin_manager
 from src.auth.jwt import get_current_user_optional
-from src.auth.oauth import oauth_helper
+from src.auth.oauth import oauth_helper, validate_oauth_callback
 from src.api.schemas import (
     OAuthAuthorizeResponse,
     OAuthCallbackRequest,
@@ -24,7 +24,7 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[Di
 
 
 # PUBLIC_INTERFACE
-@router.get("/{connector_key}/authorize", response_model=OAuthAuthorizeResponse)
+@router.get("/{connector_key}/authorize", response_model=OAuthAuthorizeResponse, summary="Initiate OAuth", description="Initiate OAuth authorization flow for a connector and return authorization URL and signed state.", operation_id="initiate_oauth")
 async def initiate_oauth(
     connector_key: str,
     connection_id: Optional[int] = Query(None, description="Existing connection ID to associate with OAuth"),
@@ -33,22 +33,18 @@ async def initiate_oauth(
 ):
     """
     Initiate OAuth authorization flow for a connector.
-    
+
     Args:
         connector_key: Connector key identifier
         connection_id: Optional existing connection ID to associate OAuth with
-        
+
     Returns:
         Authorization URL and state parameter for OAuth flow
     """
-    # Get plugin
     plugin = plugin_manager.get_plugin(connector_key)
     if not plugin:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Connector '{connector_key}' not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Connector '{connector_key}' not found")
+
     # Validate connection if provided
     if connection_id and current_user:
         connection = db.query(Connection).filter(
@@ -56,36 +52,20 @@ async def initiate_oauth(
             Connection.user_id == current_user["user_id"]
         ).first()
         if not connection:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Connection not found"
-            )
-    
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+
     try:
-        # Generate OAuth state and redirect URI
-        state = oauth_helper.generate_state()
+        # Signed state includes connector and optional connection_id
+        state = oauth_helper.generate_state(connector_key=connector_key, connection_id=connection_id)
         redirect_uri = oauth_helper.build_redirect_uri(connector_key)
-        
-        # Get authorization URL from plugin
         auth_url = plugin.authorize_url(redirect_uri, state)
-        
-        # Note: OAuth session data would be stored in production (Redis/session store)
-        # State parameter provides security for the OAuth flow
-        
-        return OAuthAuthorizeResponse(
-            authorization_url=auth_url,
-            state=state
-        )
-    
+        return OAuthAuthorizeResponse(authorization_url=auth_url, state=state)
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate OAuth flow: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to initiate OAuth flow: {str(e)}")
 
 
 # PUBLIC_INTERFACE
-@router.get("/{connector_key}/callback")
+@router.get("/{connector_key}/callback", summary="Handle OAuth callback GET", description="Handle OAuth callback via GET with code and state", operation_id="handle_oauth_callback_get")
 async def handle_oauth_callback_get(
     connector_key: str,
     code: Optional[str] = Query(None),
@@ -96,16 +76,6 @@ async def handle_oauth_callback_get(
 ):
     """
     Handle OAuth callback (GET method) from OAuth provider.
-    
-    Args:
-        connector_key: Connector key identifier
-        code: OAuth authorization code
-        state: OAuth state parameter
-        error: OAuth error code
-        error_description: OAuth error description
-        
-    Returns:
-        OAuth callback completion status
     """
     return await _process_oauth_callback(
         connector_key=connector_key,
@@ -118,7 +88,7 @@ async def handle_oauth_callback_get(
 
 
 # PUBLIC_INTERFACE
-@router.post("/{connector_key}/callback", response_model=OAuthCallbackResponse)
+@router.post("/{connector_key}/callback", response_model=OAuthCallbackResponse, summary="Handle OAuth callback POST", description="Handle OAuth callback via POST with code and state", operation_id="handle_oauth_callback_post")
 async def handle_oauth_callback_post(
     connector_key: str,
     callback_data: OAuthCallbackRequest,
@@ -126,13 +96,6 @@ async def handle_oauth_callback_post(
 ):
     """
     Handle OAuth callback (POST method) from OAuth provider.
-    
-    Args:
-        connector_key: Connector key identifier
-        callback_data: OAuth callback data
-        
-    Returns:
-        OAuth callback completion status
     """
     return await _process_oauth_callback(
         connector_key=connector_key,
@@ -154,89 +117,52 @@ async def _process_oauth_callback(
 ) -> OAuthCallbackResponse:
     """
     Process OAuth callback for both GET and POST methods.
-    
-    Args:
-        connector_key: Connector key identifier
-        code: OAuth authorization code
-        state: OAuth state parameter
-        error: OAuth error code
-        error_description: OAuth error description
-        connection_id: Optional connection ID
-        db: Database session
-        
-    Returns:
-        OAuth callback completion status
     """
-    # Check for OAuth errors
     if error:
         error_msg = error_description or f"OAuth error: {error}"
-        return OAuthCallbackResponse(
-            success=False,
-            message=error_msg
-        )
-    
-    # Validate required parameters
+        return OAuthCallbackResponse(success=False, message=error_msg)
+
     if not code or not state:
-        return OAuthCallbackResponse(
-            success=False,
-            message="Missing required OAuth parameters"
-        )
-    
-    # Get plugin
+        return OAuthCallbackResponse(success=False, message="Missing required OAuth parameters")
+
     plugin = plugin_manager.get_plugin(connector_key)
     if not plugin:
-        return OAuthCallbackResponse(
-            success=False,
-            message=f"Connector '{connector_key}' not found"
-        )
-    
+        return OAuthCallbackResponse(success=False, message=f"Connector '{connector_key}' not found")
+
+    # Validate signed state
+    validation = validate_oauth_callback({"code": code, "state": state})
+    if not validation.get("success"):
+        return OAuthCallbackResponse(success=False, message=validation.get("error", "Invalid state"))
+
+    state_payload = validation.get("payload", {})
+    # If connection_id not explicitly given, try from state
+    if connection_id is None:
+        connection_id = state_payload.get("connection_id")
+
     try:
-        # Exchange code for tokens
         token_data = await plugin.handle_oauth_callback(code, state)
-        
-        # If connection_id is provided, store tokens
         if connection_id:
             connection = db.query(Connection).filter(Connection.id == connection_id).first()
             if connection:
-                # Remove existing tokens for this connection
                 db.query(OAuthToken).filter(OAuthToken.connection_id == connection_id).delete()
-                
-                # Create new token
                 oauth_token = OAuthToken(
                     connection_id=connection_id,
                     access_token=token_data.get("access_token"),
                     refresh_token=token_data.get("refresh_token"),
                     expires_at=token_data.get("expires_at")
                 )
-                
                 db.add(oauth_token)
-                
-                # Update connection status
                 connection.status = "active"
-                
                 db.commit()
-                
-                return OAuthCallbackResponse(
-                    success=True,
-                    message="OAuth authorization successful",
-                    connection_id=connection_id
-                )
-        
-        # If no connection_id, return success but note that tokens weren't stored
-        return OAuthCallbackResponse(
-            success=True,
-            message="OAuth authorization successful (tokens not stored - no connection specified)"
-        )
-    
+                return OAuthCallbackResponse(success=True, message="OAuth authorization successful", connection_id=connection_id)
+
+        return OAuthCallbackResponse(success=True, message="OAuth authorization successful (tokens not stored - no connection specified)")
     except Exception as e:
-        return OAuthCallbackResponse(
-            success=False,
-            message=f"OAuth callback failed: {str(e)}"
-        )
+        return OAuthCallbackResponse(success=False, message=f"OAuth callback failed: {str(e)}")
 
 
 # PUBLIC_INTERFACE
-@router.delete("/{connector_key}/revoke/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{connector_key}/revoke/{connection_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Revoke OAuth token", description="Revoke stored OAuth tokens for a specific connection", operation_id="revoke_oauth_token")
 async def revoke_oauth_token(
     connector_key: str,
     connection_id: int,
@@ -245,41 +171,19 @@ async def revoke_oauth_token(
 ):
     """
     Revoke OAuth tokens for a connection.
-    
-    Args:
-        connector_key: Connector key identifier
-        connection_id: Connection ID
     """
     if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
-    
-    # Get connection and verify ownership
-    connection = db.query(Connection).options(
-        joinedload(Connection.connector)
-    ).filter(
-        Connection.id == connection_id,
-        Connection.user_id == current_user["user_id"]
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    connection = db.query(Connection).options(joinedload(Connection.connector)).filter(
+        Connection.id == connection_id, Connection.user_id == current_user["user_id"]
     ).first()
-    
+
     if not connection:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Connection not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
     if connection.connector.key != connector_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Connector key mismatch"
-        )
-    
-    # Remove OAuth tokens
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Connector key mismatch")
+
     db.query(OAuthToken).filter(OAuthToken.connection_id == connection_id).delete()
-    
-    # Update connection status
     connection.status = "inactive"
-    
     db.commit()

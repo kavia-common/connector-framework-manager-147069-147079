@@ -38,7 +38,7 @@ async def list_connectors(db: Session = Depends(get_db)):
             key=connector.key,
             name=connector.name,
             config_schema=connector.config_schema,
-            supports_oauth=plugin is not None,
+            supports_oauth=(plugin.metadata.supports_oauth if plugin else False),
             oauth_scopes=plugin.metadata.oauth_scopes if plugin else [],
             created_at=connector.created_at
         ))
@@ -52,7 +52,7 @@ async def list_connectors(db: Session = Depends(get_db)):
                 key=plugin.metadata.key,
                 name=plugin.metadata.name,
                 config_schema=plugin.get_config_schema(),
-                supports_oauth=True,
+                supports_oauth=plugin.metadata.supports_oauth,
                 oauth_scopes=plugin.metadata.oauth_scopes,
                 created_at=datetime.utcnow()
             ))
@@ -90,7 +90,7 @@ async def get_connector(connector_key: str, db: Session = Depends(get_db)):
             key=stored_connector.key,
             name=stored_connector.name,
             config_schema=stored_connector.config_schema,
-            supports_oauth=plugin is not None,
+            supports_oauth=(plugin.metadata.supports_oauth if plugin else False),
             oauth_scopes=plugin.metadata.oauth_scopes if plugin else [],
             created_at=stored_connector.created_at
         )
@@ -102,7 +102,7 @@ async def get_connector(connector_key: str, db: Session = Depends(get_db)):
             key=plugin.metadata.key,
             name=plugin.metadata.name,
             config_schema=plugin.get_config_schema(),
-            supports_oauth=True,
+            supports_oauth=plugin.metadata.supports_oauth,
             oauth_scopes=plugin.metadata.oauth_scopes,
             created_at=datetime.utcnow()
         )
